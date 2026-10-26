@@ -19,6 +19,7 @@ from homeassistant.components.media_source import (
 )
 from homeassistant.core import HomeAssistant
 
+from .apple_tv_handover import redact_url
 from .const import CONF_SHOW_COPY_URL, DEFAULT_SHOW_COPY_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ class StremioMediaSource(MediaSource):
         # Handle copyurl: identifiers - these fire an event, not play media
         if identifier.startswith("copyurl:"):
             stream_url = identifier[8:]  # Remove "copyurl:" prefix
-            _LOGGER.info("Stream URL copied: %s", stream_url)
+            _LOGGER.info("Stream URL copied: %s", redact_url(stream_url))
             self.hass.bus.async_fire(
                 "stremio_stream_url",
                 {"url": stream_url, "action": "copy"},
@@ -183,7 +184,7 @@ class StremioMediaSource(MediaSource):
             # Handle copyurl: identifiers - fire event with URL for clipboard
             if identifier.startswith("copyurl:"):
                 stream_url = identifier[8:]  # Remove "copyurl:" prefix
-                _LOGGER.info("Stream URL requested for copy: %s", stream_url)
+                _LOGGER.info("Stream URL requested for copy: %s", redact_url(stream_url))
                 # Fire an event with the URL so automations/frontend can handle it
                 self.hass.bus.async_fire(
                     "stremio_stream_url",

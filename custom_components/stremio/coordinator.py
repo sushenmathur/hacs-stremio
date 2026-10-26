@@ -18,6 +18,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .apple_tv_handover import redact_url
 from .const import (
     CONF_PLAYER_SCAN_INTERVAL,
     CONF_POLLING_GATE_ENTITIES,
@@ -318,9 +319,7 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stream_url: The stream URL being played, or None to clear
         """
         self._current_stream_url = stream_url
-        _LOGGER.debug(
-            "Current stream URL set to: %s", stream_url[:100] if stream_url else None
-        )
+        _LOGGER.debug("Current stream URL set to: %s", redact_url(stream_url))
 
         # Update the data if we have current_watching
         if self.data and self.data.get("current_watching"):
