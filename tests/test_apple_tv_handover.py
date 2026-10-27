@@ -9,6 +9,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from custom_components.stremio.apple_tv_handover import (
+    VLC_APP_ID,
+    VLC_LAUNCH_CHECK,
+    VLC_LAUNCH_RETRIES,
     HandoverError,
     HandoverManager,
     HandoverMethod,
@@ -131,7 +134,10 @@ class TestSafeError:
 
 
 def _vlc_hass(states):
-    """Hass mock whose entity state walks through `states` on each read."""
+    """Hass mock whose entity state walks through `states` on each read.
+
+    Each entry is a state string or a (state, app_id) tuple.
+    """
     hass = MagicMock()
     seq = iter(states)
     last = {"value": states[-1]}
@@ -141,7 +147,9 @@ def _vlc_hass(states):
             last["value"] = next(seq)
         except StopIteration:
             pass
-        return MagicMock(state=last["value"])
+        value = last["value"]
+        state, app_id = value if isinstance(value, tuple) else (value, None)
+        return MagicMock(state=state, attributes={"app_id": app_id})
 
     hass.states.get.side_effect = _get
     hass.services.async_call = AsyncMock()
@@ -179,18 +187,39 @@ class TestHandoverViaVlcWake:
         sleep.assert_not_called()
 
     async def test_sleeping_apple_tv_is_woken_before_vlc(self):
-        # off on the initial check, off once while waking, then awake
-        hass = _vlc_hass(["off", "off", "idle"])
+        # off on the initial check, off once while waking, awake, then VLC opens
+        hass = _vlc_hass(["off", "off", "idle", ("playing", VLC_APP_ID)])
         with patch("asyncio.sleep", AsyncMock()) as sleep:
             await HandoverManager(hass).handover_via_vlc(
                 "media_player.media_apple_tv",
                 "https://files.example/a.mp4",
-                wake_delay=20,
+                wake_delay=3,
             )
         services = [c.args[1] for c in hass.services.async_call.call_args_list]
         assert services == ["turn_on", "play_media"]
-        # one poll second while still off, then the settle delay
-        assert [c.args[0] for c in sleep.call_args_list] == [1, 20]
+        # one poll second while still off, the settle delay, one VLC check
+        assert [c.args[0] for c in sleep.call_args_list] == [1, 3, 1]
+
+    async def test_launch_resent_when_vlc_does_not_open(self):
+        # awake, but tvOS drops the first launch; VLC opens after the resend
+        hass = _vlc_hass(
+            ["off", "idle"] + ["idle"] * VLC_LAUNCH_CHECK + [("playing", VLC_APP_ID)]
+        )
+        with patch("asyncio.sleep", AsyncMock()):
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv", "https://files.example/a.mp4"
+            )
+        services = [c.args[1] for c in hass.services.async_call.call_args_list]
+        assert services == ["turn_on", "play_media", "play_media"]
+
+    async def test_launch_retries_are_limited(self):
+        hass = _vlc_hass(["off", "idle"])
+        with patch("asyncio.sleep", AsyncMock()):
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv", "https://files.example/a.mp4"
+            )
+        services = [c.args[1] for c in hass.services.async_call.call_args_list]
+        assert services == ["turn_on"] + ["play_media"] * (1 + VLC_LAUNCH_RETRIES)
 
     async def test_wake_timeout_still_tries_vlc(self, caplog):
         hass = _vlc_hass(["standby"])
@@ -204,7 +233,7 @@ class TestHandoverViaVlcWake:
                 wake_delay=0,
             )
         services = [c.args[1] for c in hass.services.async_call.call_args_list]
-        assert services == ["turn_on", "play_media"]
+        assert services[:2] == ["turn_on", "play_media"]
         assert "still reports asleep" in caplog.text
 
     async def test_turn_on_failure_has_no_url(self):
