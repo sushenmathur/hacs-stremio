@@ -305,3 +305,8 @@ class TestSensorSetup:
         async_add_entities.assert_called_once()
         entities = async_add_entities.call_args[0][0]
         assert len(entities) == len(SENSOR_TYPES)
+
+
+def test_item_lists_not_recorded():
+    """Item lists stay out of recorder history (16 KB attribute limit)."""
+    assert "items" in StremioSensor._unrecorded_attributes
