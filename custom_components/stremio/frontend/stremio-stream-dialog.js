@@ -34,6 +34,7 @@ class StremioStreamDialog extends LitElement {
       streams: { type: Array },
       appleTvEntity: { type: String },
       showCopy: { type: Boolean },
+      resumePosition: { type: Number },
       _loading: { type: Boolean },
       _copiedIndex: { type: Number },
     };
@@ -89,6 +90,24 @@ class StremioStreamDialog extends LitElement {
         display: flex;
         align-items: center;
         justify-content: space-between;
+      }
+
+      .resume-hint {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 12px 20px 0;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+        color: var(--primary-text-color);
+        font-size: 0.9em;
+      }
+
+      .resume-hint ha-icon {
+        --mdc-icon-size: 20px;
+        color: var(--primary-color);
+        flex: none;
       }
 
       .dialog-header h3 {
@@ -269,6 +288,7 @@ class StremioStreamDialog extends LitElement {
     this.open = false;
     this.streams = [];
     this.showCopy = true;
+    this.resumePosition = 0;
     this._loading = false;
     this._copiedIndex = -1;
     // Bind keyboard handler for cleanup
@@ -415,6 +435,16 @@ class StremioStreamDialog extends LitElement {
             </button>
           </div>
 
+          ${this.resumePosition >= 30 ? html`
+            <div class="resume-hint" role="note">
+              <ha-icon icon="mdi:history"></ha-icon>
+              <span>
+                Last stopped at <b>${this._formatPosition(this.resumePosition)}</b>.
+                VLC starts from the beginning, so skip ahead once it's playing.
+              </span>
+            </div>
+          ` : ''}
+
           <div class="dialog-content">
             ${this._loading ? this._renderLoading() : 
               this.streams.length > 0 ? this._renderStreams() : this._renderEmpty()}
@@ -422,6 +452,14 @@ class StremioStreamDialog extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  _formatPosition(seconds) {
+    const total = Math.floor(seconds);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
   }
 
   _renderLoading() {
@@ -670,6 +708,7 @@ window.StremioStreamDialog = {
   /**
    * @param {object} [options]
    * @param {boolean} [options.showCopy=true] Show the Copy URL button
+   * @param {number} [options.resumePosition] Seconds where playback last stopped
    */
   show(hass, mediaItem, streams, appleTvEntity, options = {}) {
     let dialog = document.querySelector('stremio-stream-dialog');
@@ -682,6 +721,7 @@ window.StremioStreamDialog = {
     dialog.streams = streams || [];
     dialog.appleTvEntity = appleTvEntity;
     dialog.showCopy = options.showCopy !== false;
+    dialog.resumePosition = options.resumePosition || 0;
     dialog.open = true;
     return dialog;
   },

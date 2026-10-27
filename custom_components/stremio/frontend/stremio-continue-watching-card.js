@@ -787,7 +787,7 @@ class StremioContinueWatchingCard extends LitElement {
         if (streams && streams.length > 0) {
           console.log('[Continue Watching Card] Found', streams.length, 'streams');
           // Show the stream dialog
-          const displayItem = { ...item };
+          const displayItem = { ...item, resumePosition: this._resumePosition(item, season, episode) };
           if (season && episode) {
             displayItem.title = `${item.title || item.name} - S${season}E${episode}`;
           }
@@ -801,6 +801,20 @@ class StremioContinueWatchingCard extends LitElement {
         console.error('[Continue Watching Card] Failed to get streams:', error);
         this._showToast(`Failed to get streams: ${error.message}`, 'error');
       });
+  }
+
+  /**
+   * Seconds where the item was stopped, or 0. For series only when the chosen
+   * episode is the one that was being watched.
+   */
+  _resumePosition(item, season, episode) {
+    const seconds = (Number(item.time_offset) || 0) / 1000;
+    if (seconds <= 0) return 0;
+    if (item.type === 'series') {
+      if (!season || !episode) return 0;
+      if (Number(season) !== Number(item.season) || Number(episode) !== Number(item.episode)) return 0;
+    }
+    return seconds;
   }
 
   _showStreamDialog(item, streams) {
@@ -818,7 +832,10 @@ class StremioContinueWatchingCard extends LitElement {
         },
         streams,
         this.config.apple_tv_entity,
-        { showCopy: this.config.show_copy_button !== false }
+        {
+          showCopy: this.config.show_copy_button !== false,
+          resumePosition: item.resumePosition || 0,
+        }
       );
     } else {
       // Fallback: Create dialog directly
@@ -836,6 +853,7 @@ class StremioContinueWatchingCard extends LitElement {
       dialog.streams = streams;
       dialog.appleTvEntity = this.config.apple_tv_entity;
       dialog.showCopy = this.config.show_copy_button !== false;
+      dialog.resumePosition = item.resumePosition || 0;
       dialog.open = true;
     }
   }
