@@ -13,8 +13,14 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
-from .apple_tv_handover import HandoverError, HandoverManager
+from .apple_tv_handover import (
+    DEFAULT_WAKE_DELAY,
+    HandoverError,
+    HandoverManager,
+    safe_error,
+)
 from .const import (
     CONF_ADDON_STREAM_ORDER,
     CONF_APPLE_TV_CREDENTIALS,
@@ -57,6 +63,11 @@ ATTR_EPISODE = "episode"
 ATTR_DEVICE_ID = "device_id"
 ATTR_STREAM_URL = "stream_url"
 ATTR_METHOD = "method"
+ATTR_WAKE_DELAY = "wake_delay"
+
+# Only Apple TV integration entities can launch VLC; others (e.g. Music Assistant
+# AirPlay speakers named after the Apple TV) fail with unrelated errors.
+APPLE_TV_PLATFORM = "apple_tv"
 ATTR_GENRE = "genre"
 ATTR_SKIP = "skip"
 ATTR_CATALOG_TYPE = "catalog_type"
@@ -109,6 +120,9 @@ HANDOVER_SCHEMA = vol.Schema(
         vol.Optional(ATTR_MEDIA_ID): cv.string,
         vol.Optional(ATTR_STREAM_URL): cv.string,
         vol.Optional(ATTR_METHOD): vol.In(["auto", "airplay", "vlc", "direct"]),
+        vol.Optional(ATTR_WAKE_DELAY): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=60)  # type: ignore[arg-type]
+        ),
     }
 )
 
@@ -203,16 +217,33 @@ def _resolve_apple_tv_entity(
 ) -> str:
     """Pick the Apple TV media_player for a handover.
 
-    Uses the requested entity if it exists, otherwise the configured default.
+    Uses the requested entity if it exists and belongs to the Apple TV
+    integration, otherwise the configured default.
 
     Raises:
-        ServiceValidationError: If neither entity exists
+        ServiceValidationError: If neither entity is a usable Apple TV
     """
+    registry = er.async_get(hass)
+
+    def _platform(entity_id: str) -> str | None:
+        entry = registry.async_get(entity_id)
+        return entry.platform if entry else None
 
     def _usable(entity_id: str) -> bool:
-        return entity_id.startswith("media_player.") and (
-            hass.states.get(entity_id) is not None
-        )
+        if not entity_id.startswith("media_player.") or (
+            hass.states.get(entity_id) is None
+        ):
+            return False
+        platform = _platform(entity_id)
+        if platform != APPLE_TV_PLATFORM:
+            _LOGGER.info(
+                "'%s' belongs to %s, not %s; it can't be a handover target",
+                entity_id,
+                platform or "no integration",
+                APPLE_TV_PLATFORM,
+            )
+            return False
+        return True
 
     if requested and _usable(requested):
         return requested
@@ -224,6 +255,21 @@ def _resolve_apple_tv_entity(
             configured,
         )
         return configured
+
+    for candidate in (requested, configured):
+        if candidate and hass.states.get(candidate) is not None:
+            platform = _platform(candidate) or "no integration"
+            raise ServiceValidationError(
+                f"{candidate} belongs to {platform}, not {APPLE_TV_PLATFORM}. "
+                "Pick an Apple TV integration entity on the card or in the Stremio "
+                "integration options.",
+                translation_domain=DOMAIN,
+                translation_key="not_apple_tv_entity",
+                translation_placeholders={
+                    "entity_id": candidate,
+                    "platform": platform,
+                },
+            )
 
     raise ServiceValidationError(
         "No Apple TV entity to send to. Set the Apple TV entity on the card, "
@@ -552,7 +598,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 if streams:
                     stream_url = streams[0].get("url")
             except StremioConnectionError as err:
-                raise HomeAssistantError(f"Failed to get stream URL: {err}") from err
+                raise HomeAssistantError(
+                    f"Failed to get stream URL: {safe_error(err)}"
+                ) from err
         else:
             # Stream URL was provided directly, build minimal media info
             media_info = {
@@ -598,6 +646,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 stream_url=stream_url,
                 method=method,
                 title=title,
+                wake_delay=call.data.get(ATTR_WAKE_DELAY, DEFAULT_WAKE_DELAY),
             )
 
             _LOGGER.info("Handover result: %s", result)
@@ -606,7 +655,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             coordinator.set_current_media(media_info, stream_url)
 
         except HandoverError as err:
-            raise HomeAssistantError(f"Handover failed: {err}") from err
+            raise HomeAssistantError(f"Handover failed: {safe_error(err)}") from err
 
         # Fire event
         hass.bus.async_fire(

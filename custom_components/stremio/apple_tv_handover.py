@@ -31,6 +31,31 @@ def redact_url(url: str | None) -> str:
     return f"host={urlsplit(url).hostname or '?'} len={len(url)}"
 
 
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+")
+_URL_REDACTED = "<redacted-url>"
+
+
+def safe_error(err: BaseException | str) -> str:
+    """Describe an error without any URL it may contain (links carry tokens)."""
+    if isinstance(err, BaseException):
+        message = str(err)
+        name = type(err).__name__
+    else:
+        message, name = err, ""
+    message = _URL_RE.sub(_URL_REDACTED, message)
+    if name and name not in ("HandoverError", "HomeAssistantError"):
+        return f"{name}: {message}" if message else name
+    return message
+
+
+# Apple TV states that mean the box is asleep and must be woken before VLC can launch
+APPLE_TV_ASLEEP_STATES = ("off", "standby")
+# Seconds to wait for the Apple TV to report it is awake after turn_on
+WAKE_TIMEOUT = 30
+# Seconds to let tvOS settle after waking before launching VLC
+DEFAULT_WAKE_DELAY = 15
+
+
 # Try to import pyatv, but handle if not installed or incompatible
 try:
     import pyatv
@@ -254,8 +279,8 @@ class HandoverManager:
                 return self._discovered_devices
 
             except Exception as err:
-                _LOGGER.error("Error discovering Apple TV devices: %s", err)
-                raise HandoverError(f"Discovery failed: {err}") from err
+                _LOGGER.error("Error discovering Apple TV devices: %s", safe_error(err))
+                raise HandoverError(f"Discovery failed: {safe_error(err)}") from err
 
     async def get_device_by_name(self, device_name: str) -> Any:
         """Get an Apple TV device configuration by name.
@@ -431,8 +456,10 @@ class HandoverManager:
         except HandoverError:
             raise
         except Exception as err:
-            _LOGGER.error("AirPlay handover failed: %s", err)
-            raise AppleTVConnectionError(f"AirPlay handover failed: {err}") from err
+            _LOGGER.error("AirPlay handover failed: %s", safe_error(err))
+            raise AppleTVConnectionError(
+                f"AirPlay handover failed: {safe_error(err)}"
+            ) from err
 
     def generate_vlc_deep_link(
         self,
@@ -462,14 +489,20 @@ class HandoverManager:
         stream_url: str,
         title: str | None = None,
         subtitle_url: str | None = None,
+        wake_delay: float = DEFAULT_WAKE_DELAY,
     ) -> bool:
         """Send a stream to Apple TV's VLC app via a vlc-x-callback link.
+
+        If the Apple TV is asleep it is turned on first, and VLC is launched
+        once it reports awake plus wake_delay seconds (tvOS ignores app
+        launches while it is still waking).
 
         Args:
             device_entity_id: Entity ID of the target media player
             stream_url: URL of the stream to play
             title: Optional title for display
             subtitle_url: Optional subtitle file URL
+            wake_delay: Seconds to wait after waking before launching VLC
 
         Returns:
             True if the command was sent (but playback may not start)
@@ -500,6 +533,9 @@ class HandoverManager:
                 "in Home Assistant's Entities page."
             )
 
+        if state.state in APPLE_TV_ASLEEP_STATES:
+            await self._wake_apple_tv(device_entity_id, wake_delay)
+
         try:
             vlc_url = self.generate_vlc_deep_link(stream_url, title, subtitle_url)
 
@@ -520,8 +556,45 @@ class HandoverManager:
             return True
 
         except Exception as err:
-            _LOGGER.error("VLC handover failed: %s", err)
-            raise HandoverError(f"VLC handover failed: {err}") from err
+            _LOGGER.error(
+                "VLC handover to '%s' failed: %s", device_entity_id, safe_error(err)
+            )
+            raise HandoverError(
+                f"VLC handover to '{device_entity_id}' failed: {safe_error(err)}"
+            ) from err
+
+    async def _wake_apple_tv(self, device_entity_id: str, wake_delay: float) -> None:
+        """Turn on a sleeping Apple TV and wait until it can launch apps."""
+        _LOGGER.info("Apple TV '%s' is asleep; turning it on", device_entity_id)
+        try:
+            await self.hass.services.async_call(
+                "media_player",
+                "turn_on",
+                {"entity_id": device_entity_id},
+                blocking=True,
+            )
+        except Exception as err:
+            raise HandoverError(
+                f"Could not turn on '{device_entity_id}': {safe_error(err)}"
+            ) from err
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WAKE_TIMEOUT
+        while loop.time() < deadline:
+            state = self.hass.states.get(device_entity_id)
+            if state is not None and state.state not in APPLE_TV_ASLEEP_STATES:
+                break
+            await asyncio.sleep(1)
+        else:
+            _LOGGER.warning(
+                "Apple TV '%s' still reports asleep after %ss; trying VLC anyway",
+                device_entity_id,
+                WAKE_TIMEOUT,
+            )
+
+        if wake_delay > 0:
+            _LOGGER.debug("Waiting %ss for '%s' to settle", wake_delay, device_entity_id)
+            await asyncio.sleep(wake_delay)
 
     async def handover_direct(
         self,
@@ -637,8 +710,8 @@ class HandoverManager:
                     "The stream server may be slow or unreachable from Apple TV."
                 ) from err
 
-            _LOGGER.error("Direct handover failed: %s", err)
-            raise HandoverError(f"Direct handover failed: {err}") from err
+            _LOGGER.error("Direct handover failed: %s", safe_error(err))
+            raise HandoverError(f"Direct handover failed: {safe_error(err)}") from err
 
     async def handover(
         self,
@@ -647,6 +720,7 @@ class HandoverManager:
         method: HandoverMethod | str = HandoverMethod.AUTO,
         title: str | None = None,
         subtitle_url: str | None = None,
+        wake_delay: float = DEFAULT_WAKE_DELAY,
     ) -> dict[str, Any]:
         """Perform handover to Apple TV using the specified method.
 
@@ -658,6 +732,7 @@ class HandoverManager:
             method: Handover method to use
             title: Optional title for display
             subtitle_url: Optional subtitle URL
+            wake_delay: Seconds to wait after waking a sleeping Apple TV (VLC only)
 
         Returns:
             Dictionary with handover result info
@@ -712,7 +787,9 @@ class HandoverManager:
                 entity_id = await self._find_media_player_entity(device_identifier)
 
             if method == HandoverMethod.VLC:
-                await self.handover_via_vlc(entity_id, stream_url, title, subtitle_url)
+                await self.handover_via_vlc(
+                    entity_id, stream_url, title, subtitle_url, wake_delay
+                )
                 result["success"] = True
                 result["method"] = "vlc"
                 result["entity_id"] = entity_id
@@ -749,26 +826,27 @@ class HandoverManager:
                             result["success"] = True
                             result["method"] = "airplay"
                             result["fallback"] = True
-                            result["original_error"] = str(direct_err)
+                            result["original_error"] = safe_error(direct_err)
                             _LOGGER.info(
                                 "AirPlay fallback successful after direct handover failed"
                             )
                             return result
                         except Exception as airplay_err:
                             _LOGGER.error(
-                                "AirPlay fallback also failed: %s", airplay_err
+                                "AirPlay fallback also failed: %s",
+                                safe_error(airplay_err),
                             )
                             # Re-raise the original direct error with additional context
                             raise HandoverError(
-                                f"Direct handover failed ({direct_err}) and AirPlay "
-                                f"fallback also failed ({airplay_err}). "
+                                f"Direct handover failed ({safe_error(direct_err)}) and "
+                                f"AirPlay fallback also failed ({safe_error(airplay_err)}). "
                                 f"Please check your stream URL and Apple TV configuration."
                             ) from direct_err
                     # No fallback available or different error, re-raise
                     raise
 
         except Exception as err:
-            result["error"] = str(err)
+            result["error"] = safe_error(err)
             raise
 
         return result

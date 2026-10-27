@@ -9,9 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from custom_components.stremio.apple_tv_handover import (
+    HandoverError,
     HandoverManager,
     HandoverMethod,
     redact_url,
+    safe_error,
 )
 
 VLC_PREFIX = "vlc-x-callback://x-callback-url/stream?url="
@@ -106,3 +108,111 @@ class TestRecommendedMethod:
                 _manager().get_recommended_method("https://x/a.m3u8")
                 == HandoverMethod.AIRPLAY
             )
+
+
+class TestSafeError:
+    """Error text must never carry a URL (deep links embed debrid tokens)."""
+
+    def test_strips_deep_link_and_stream_url(self):
+        err = RuntimeError(
+            "Could not resolve ['vlc-x-callback://x-callback-url/stream?url="
+            "https%3A%2F%2Fdebrid.example%2FTOKEN%2Fa.mkv'] or https://x.example/TOKEN"
+        )
+        text = safe_error(err)
+        assert "://" not in text
+        assert "TOKEN" not in text
+        assert text.startswith("RuntimeError: ")
+        assert "<redacted-url>" in text
+
+    def test_plain_message_kept(self):
+        assert safe_error(HandoverError("launch_app is not supported")) == (
+            "launch_app is not supported"
+        )
+
+
+def _vlc_hass(states):
+    """Hass mock whose entity state walks through `states` on each read."""
+    hass = MagicMock()
+    seq = iter(states)
+    last = {"value": states[-1]}
+
+    def _get(_entity_id):
+        try:
+            last["value"] = next(seq)
+        except StopIteration:
+            pass
+        return MagicMock(state=last["value"])
+
+    hass.states.get.side_effect = _get
+    hass.services.async_call = AsyncMock()
+    return hass
+
+
+class TestHandoverViaVlcErrors:
+    """VLC handover failures name the target but never the link."""
+
+    async def test_error_has_entity_but_no_url(self):
+        hass = _vlc_hass(["idle"])
+        hass.services.async_call.side_effect = RuntimeError(
+            "Could not resolve ['vlc-x-callback://x-callback-url/stream?url=SECRET']"
+        )
+        with pytest.raises(HandoverError) as err:
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv", "https://debrid.example/SECRET/a.mkv"
+            )
+        assert "media_player.media_apple_tv" in str(err.value)
+        assert "://" not in str(err.value)
+        assert "SECRET" not in str(err.value)
+
+
+class TestHandoverViaVlcWake:
+    """A sleeping Apple TV is woken, and VLC waits for it to settle."""
+
+    async def test_awake_apple_tv_is_not_turned_on(self):
+        hass = _vlc_hass(["idle"])
+        with patch("asyncio.sleep", AsyncMock()) as sleep:
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv", "https://files.example/a.mp4"
+            )
+        services = [c.args[1] for c in hass.services.async_call.call_args_list]
+        assert services == ["play_media"]
+        sleep.assert_not_called()
+
+    async def test_sleeping_apple_tv_is_woken_before_vlc(self):
+        # off on the initial check, off once while waking, then awake
+        hass = _vlc_hass(["off", "off", "idle"])
+        with patch("asyncio.sleep", AsyncMock()) as sleep:
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv",
+                "https://files.example/a.mp4",
+                wake_delay=20,
+            )
+        services = [c.args[1] for c in hass.services.async_call.call_args_list]
+        assert services == ["turn_on", "play_media"]
+        # one poll second while still off, then the settle delay
+        assert [c.args[0] for c in sleep.call_args_list] == [1, 20]
+
+    async def test_wake_timeout_still_tries_vlc(self, caplog):
+        hass = _vlc_hass(["standby"])
+        caplog.set_level(logging.WARNING, logger=HANDOVER_LOGGER)
+        with patch("asyncio.sleep", AsyncMock()), patch(
+            "custom_components.stremio.apple_tv_handover.WAKE_TIMEOUT", 0
+        ):
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv",
+                "https://files.example/a.mp4",
+                wake_delay=0,
+            )
+        services = [c.args[1] for c in hass.services.async_call.call_args_list]
+        assert services == ["turn_on", "play_media"]
+        assert "still reports asleep" in caplog.text
+
+    async def test_turn_on_failure_has_no_url(self):
+        hass = _vlc_hass(["off"])
+        hass.services.async_call.side_effect = RuntimeError("boom https://x.example/T")
+        with pytest.raises(HandoverError) as err:
+            await HandoverManager(hass).handover_via_vlc(
+                "media_player.media_apple_tv", "https://files.example/a.mp4"
+            )
+        assert "Could not turn on" in str(err.value)
+        assert "://" not in str(err.value)
