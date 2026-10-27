@@ -406,12 +406,15 @@ class StremioClient:
                 if not isinstance(library_items, list):
                     library_items = []
 
-                # Filter items with watch progress (timeWatched > 0)
+                # Same rule as Stremio: in the library (or watched without
+                # adding, "temp") and stopped part-way (timeOffset > 0).
+                # Finished titles have timeOffset 0 and drop off.
                 watching = [
                     item
                     for item in library_items
                     if isinstance(item, dict)
-                    and item.get("state", {}).get("timeWatched", 0) > 0
+                    and (not item.get("removed", False) or item.get("temp", False))
+                    and (item.get("state") or {}).get("timeOffset", 0) > 0
                 ]
 
                 # Sort by most recently watched and limit

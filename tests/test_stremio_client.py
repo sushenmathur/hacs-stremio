@@ -449,3 +449,30 @@ class TestContinueWatchingResumeFields:
             [{"_id": "tt1", "name": "M", "type": "movie", "state": {}}]
         )
         assert item["time_offset"] == 0
+
+
+class TestContinueWatchingFilter:
+    """Continue Watching uses Stremio's rule: in progress and in library or temp."""
+
+    async def test_filter(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        client = StremioClient("test@example.com", "password")
+        client._auth_key = "key"
+        library = [
+            {"_id": "tt1", "name": "In progress", "type": "movie", "state": {"timeOffset": 5000, "timeWatched": 5000, "lastWatched": "2026-10-27T01:00:00.000Z"}},
+            {"_id": "tt2", "name": "Finished", "type": "movie", "state": {"timeOffset": 0, "timeWatched": 9000}},
+            {"_id": "tt3", "name": "Temp in progress", "type": "movie", "removed": True, "temp": True, "state": {"timeOffset": 1000, "lastWatched": "2026-10-27T02:00:00.000Z"}},
+            {"_id": "tt4", "name": "Removed", "type": "movie", "removed": True, "state": {"timeOffset": 1000}},
+        ]
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={"result": library})
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=response)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.post = MagicMock(return_value=ctx)
+        client._get_session = AsyncMock(return_value=session)
+
+        items = await client.async_get_continue_watching()
+        assert [i["imdb_id"] for i in items] == ["tt3", "tt1"]

@@ -246,6 +246,10 @@ class StremioSensor(CoordinatorEntity[StremioDataUpdateCoordinator], SensorEntit
 
     entity_description: StremioSensorEntityDescription
 
+    # Item lists can pass the recorder's 16 KB attribute limit; cards read
+    # them from the live state, so keep them out of history
+    _unrecorded_attributes = frozenset({"items"})
+
     def __init__(
         self,
         coordinator: StremioDataUpdateCoordinator,
