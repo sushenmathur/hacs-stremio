@@ -167,7 +167,13 @@ class TestUpdatePlayback:
     def _client_with(item):
         client = StremioClient("test@example.com", "password")
         client._auth_key = "key"
-        client.async_find_item = AsyncMock(return_value=item)
+        if item is None or item.get("removed"):
+            client.async_find_existing_item = AsyncMock(return_value=None)
+            client._async_new_library_item = AsyncMock(
+                return_value=item and {**item, "temp": True}
+            )
+        else:
+            client.async_find_existing_item = AsyncMock(return_value=item)
         response = MagicMock(status=200)
         response.json = AsyncMock(return_value={"result": {"success": True}})
         ctx = MagicMock()
@@ -243,3 +249,58 @@ class TestContinueWatchingIncludesTemp:
             ]
         )
         assert [i["imdb_id"] for i in items] == ["tt1"]
+
+
+class TestNewLibraryItem:
+    """Series not in the library get an entry built from Cinemeta."""
+
+    async def test_series_without_default_video_id(self):
+        client = StremioClient("test@example.com", "password")
+        response = MagicMock(status=200)
+        # Cinemeta series metadata has no behaviorHints.defaultVideoId
+        response.json = AsyncMock(
+            return_value={"meta": {"type": "series", "name": "VisionQuest", "poster": "p"}}
+        )
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=response)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.get = MagicMock(return_value=ctx)
+        client._get_session = AsyncMock(return_value=session)
+
+        item = await client._async_new_library_item("tt9", "series")
+        assert item["_id"] == "tt9"
+        assert item["name"] == "VisionQuest"
+        assert item["removed"] is True and item["temp"] is True
+
+    async def test_unknown_title_returns_none(self):
+        client = StremioClient("test@example.com", "password")
+        response = MagicMock(status=404)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=response)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.get = MagicMock(return_value=ctx)
+        client._get_session = AsyncMock(return_value=session)
+        assert await client._async_new_library_item("tt0", "series") is None
+
+    async def test_new_series_episode_recorded(self):
+        client = StremioClient("test@example.com", "password")
+        client._auth_key = "key"
+        client.async_find_existing_item = AsyncMock(return_value=None)
+        client._async_new_library_item = AsyncMock(
+            return_value={"_id": "tt9", "type": "series", "name": "V", "removed": True, "temp": True, "state": {}}
+        )
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={"result": {"success": True}})
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=response)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.post = MagicMock(return_value=ctx)
+        client._get_session = AsyncMock(return_value=session)
+
+        assert await client.async_update_playback("tt9", "series", 1, 4)
+        sent = session.post.call_args.kwargs["json"]["changes"][0]
+        assert sent["state"]["video_id"] == "tt9:1:4"
+        assert sent["state"]["timeOffset"] == 1000
