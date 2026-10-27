@@ -214,6 +214,18 @@ handover_to_apple_tv:
         number:
           min: 0
           max: 1000
+    title:
+      name: Title
+      description: Title shown as now playing (cards send it).
+      required: false
+      selector:
+        text:
+    poster:
+      name: Poster
+      description: Poster image URL shown as now playing (cards send it).
+      required: false
+      selector:
+        text:
     track_progress:
       name: Save progress to Stremio
       description: >-

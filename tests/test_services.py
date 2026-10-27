@@ -579,6 +579,43 @@ class TestHandoverTargetResolution:
         assert manager.handover.call_args.kwargs["wake_delay"] == 25
 
     @pytest.mark.asyncio
+    async def test_card_title_and_event_without_url(
+        self, mock_service_hass, mock_coordinator
+    ):
+        """The card's title reaches now playing; the event never carries the link."""
+        mock_coordinator.data = {"current_watching": None}
+        mock_coordinator.set_current_media = MagicMock()
+        _add_media_player(mock_service_hass, "media_player.media_apple_tv")
+        await async_setup_services(mock_service_hass)
+        events = []
+        mock_service_hass.bus.async_listen(
+            "stremio_playback_started", lambda e: events.append(e)
+        )
+
+        await self._call_handover(
+            mock_service_hass,
+            {
+                "device_id": "media_player.media_apple_tv",
+                "stream_url": "https://debrid.example/SECRETKEY/Show.S01E01.mkv",
+                "method": "vlc",
+                "media_id": "tt9",
+                "media_type": "series",
+                "season": 1,
+                "episode": 1,
+                "title": "Show - S1E1",
+                "poster": "https://img.example/p.jpg",
+                "track_progress": False,
+            },
+        )
+        await mock_service_hass.async_block_till_done()
+
+        media_info = mock_coordinator.set_current_media.call_args.args[0]
+        assert media_info["title"] == "Show - S1E1"
+        assert media_info["poster"] == "https://img.example/p.jpg"
+        assert (media_info["season"], media_info["episode"]) == (1, 1)
+        assert events and "SECRETKEY" not in str(events[0].data)
+
+    @pytest.mark.asyncio
     async def test_handover_error_has_no_url(self, mock_service_hass, mock_coordinator):
         """A handover failure surfaces without the stream or deep link URL."""
         from custom_components.stremio.apple_tv_handover import HandoverError

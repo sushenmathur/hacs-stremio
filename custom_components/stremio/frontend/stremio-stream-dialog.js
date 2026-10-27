@@ -392,6 +392,8 @@ class StremioStreamDialog extends LitElement {
     if (media.imdb_id) {
       data.media_id = media.imdb_id;
       data.media_type = media.type === 'series' ? 'series' : 'movie';
+      if (media.title) data.title = String(media.title);
+      if (typeof media.poster === 'string' && media.poster) data.poster = media.poster;
       if (data.media_type === 'series' && media.season && media.episode) {
         data.season = Number(media.season);
         data.episode = Number(media.episode);

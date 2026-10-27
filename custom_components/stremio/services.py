@@ -17,6 +17,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .apple_tv_handover import (
     DEFAULT_WAKE_DELAY,
+    describe_stream_url,
     HandoverError,
     HandoverManager,
     safe_error,
@@ -66,6 +67,8 @@ ATTR_STREAM_URL = "stream_url"
 ATTR_METHOD = "method"
 ATTR_WAKE_DELAY = "wake_delay"
 ATTR_TRACK_PROGRESS = "track_progress"
+ATTR_TITLE = "title"
+ATTR_POSTER = "poster"
 
 # Only Apple TV integration entities can launch VLC; others (e.g. Music Assistant
 # AirPlay speakers named after the Apple TV) fail with unrelated errors.
@@ -129,6 +132,8 @@ HANDOVER_SCHEMA = vol.Schema(
         vol.Optional(ATTR_SEASON): vol.Coerce(int),  # type: ignore[arg-type]
         vol.Optional(ATTR_EPISODE): vol.Coerce(int),  # type: ignore[arg-type]
         vol.Optional(ATTR_TRACK_PROGRESS, default=True): cv.boolean,
+        vol.Optional(ATTR_TITLE): cv.string,
+        vol.Optional(ATTR_POSTER): cv.string,
     }
 )
 
@@ -671,7 +676,24 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 "type": call.data.get(ATTR_MEDIA_TYPE, "movie"),
                 "season": call.data.get(ATTR_SEASON),
                 "episode": call.data.get(ATTR_EPISODE),
+                "title": call.data.get(ATTR_TITLE),
+                "poster": call.data.get(ATTR_POSTER),
             }
+            # Fill gaps from what the integration already knows about the title
+            if media_id and coordinator.data and not (
+                media_info["title"] and media_info["poster"]
+            ):
+                for known in (
+                    *(coordinator.data.get("continue_watching") or []),
+                    *(coordinator.data.get("library") or []),
+                ):
+                    if known.get("imdb_id") == media_id:
+                        media_info["title"] = media_info["title"] or known.get("title")
+                        media_info["poster"] = media_info["poster"] or known.get(
+                            "poster"
+                        )
+                        media_info["year"] = known.get("year")
+                        break
 
         if not stream_url:
             raise ServiceValidationError(
@@ -734,7 +756,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             {
                 "device_id": device_id,
                 "media_id": media_id,
-                "stream_url": stream_url,
+                "stream_url": describe_stream_url(stream_url),
                 "method": method,
             },
         )
