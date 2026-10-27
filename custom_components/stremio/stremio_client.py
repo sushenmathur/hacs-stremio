@@ -1093,7 +1093,9 @@ class StremioClient:
         if not self._auth_key:
             raise StremioConnectionError("Client not authenticated")
 
-        item = await self.async_find_item(media_id, media_type)
+        item = await self.async_find_existing_item(media_id)
+        if not isinstance(item, dict):
+            item = await self._async_new_library_item(media_id, media_type)
         if not isinstance(item, dict):
             _LOGGER.warning("Cannot record playback: %s not found", media_id)
             return False
@@ -1181,6 +1183,45 @@ class StremioClient:
             raise
         except ClientError as err:
             raise StremioConnectionError(f"Connection failed: {err}") from err
+
+    async def _async_new_library_item(
+        self, media_id: str, media_type: str
+    ) -> dict[str, Any] | None:
+        """Build a library item for a title that isn't in the library yet.
+
+        Unlike async_find_item this doesn't need behaviorHints.defaultVideoId,
+        which Cinemeta only sets for movies, so series work too.
+        """
+        from .const import CINEMETA_BASE_URL
+
+        meta: dict[str, Any] = {}
+        try:
+            session = await self._get_session()
+            async with session.get(
+                f"{CINEMETA_BASE_URL}/meta/{media_type}/{media_id}.json",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status == 200:
+                    meta = (await response.json()).get("meta") or {}
+                else:
+                    _LOGGER.debug(
+                        "Cinemeta returned status %d for %s", response.status, media_id
+                    )
+        except (ClientError, TimeoutError) as err:
+            _LOGGER.debug("Cinemeta lookup failed for %s: %s", media_id, err)
+
+        if not meta.get("name"):
+            return None
+        return {
+            "_id": media_id,
+            "type": meta.get("type") or media_type,
+            "name": meta.get("name"),
+            "poster": meta.get("poster"),
+            "posterShape": "poster",
+            "removed": True,
+            "temp": True,
+            "state": {},
+        }
 
     async def async_remove_from_library(self, media_id: str) -> bool:
         """Remove item from library.
