@@ -209,6 +209,11 @@ SENSOR_TYPES: tuple[StremioSensorEntityDescription, ...] = (
                         if item.get("duration", 0) > 0
                         else 0
                     ),
+                    "time_offset": item.get("time_offset", 0),
+                    "duration": item.get("duration", 0),
+                    "video_id": item.get("video_id"),
+                    "season": item.get("season"),
+                    "episode": item.get("episode"),
                 }
                 for item in data.get("continue_watching", [])
             ]
