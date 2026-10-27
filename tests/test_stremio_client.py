@@ -408,3 +408,44 @@ class TestGetStreamsIntegration:
             assert result[0]["title"] == "1080p BluRay"
             # 720p should still be included
             assert len(result) == 2
+
+
+class TestContinueWatchingResumeFields:
+    """Continue-watching items carry the playback position for resume hints."""
+
+    def test_time_offset_and_video_id_exposed(self):
+        client = StremioClient("test@example.com", "password")
+        items = client._process_continue_watching(
+            [
+                {
+                    "_id": "tt0111161",
+                    "name": "Movie",
+                    "type": "movie",
+                    "state": {"timeWatched": 900000, "timeOffset": 2520000, "duration": 8520000},
+                },
+                {
+                    "_id": "tt0903747",
+                    "name": "Show",
+                    "type": "series",
+                    "state": {
+                        "timeWatched": 100,
+                        "timeOffset": 600000,
+                        "duration": 3000000,
+                        "video_id": "tt0903747:2:5",
+                    },
+                },
+            ]
+        )
+        movie, show = items
+        assert movie["time_offset"] == 2520000
+        assert movie["progress"] == 900000  # unchanged: total time watched
+        assert show["time_offset"] == 600000
+        assert show["video_id"] == "tt0903747:2:5"
+        assert (show["season"], show["episode"]) == (2, 5)
+
+    def test_missing_time_offset_defaults_to_zero(self):
+        client = StremioClient("test@example.com", "password")
+        (item,) = client._process_continue_watching(
+            [{"_id": "tt1", "name": "M", "type": "movie", "state": {}}]
+        )
+        assert item["time_offset"] == 0

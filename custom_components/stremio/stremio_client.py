@@ -1251,6 +1251,10 @@ class StremioClient:
                     "poster": item.get("poster"),
                     "progress": state.get("timeWatched", 0),
                     "duration": state.get("duration", 0),
+                    # Playback position where it was stopped (ms); timeWatched is
+                    # total time watched and can differ after skipping or rewatching
+                    "time_offset": state.get("timeOffset", 0),
+                    "video_id": video_id,
                     "season": season,
                     "episode": episode,
                     "episode_title": None,  # Will be populated if metadata is fetched
