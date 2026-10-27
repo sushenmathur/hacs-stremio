@@ -22,11 +22,10 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.util import dt as dt_util
 
-from .apple_tv_handover import safe_error
+from .apple_tv_handover import VLC_APP_ID, safe_error
 
 _LOGGER = logging.getLogger(__name__)
 
-VLC_APP_ID = "org.videolan.vlc-ios"
 # Seconds to wait for VLC to start playing the handed-over stream
 START_TIMEOUT = 90
 # Save progress this often while playing
