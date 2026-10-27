@@ -81,6 +81,18 @@ def mock_service_hass(hass: HomeAssistant, mock_coordinator):
     return hass
 
 
+
+def _add_media_player(hass, entity_id, platform="apple_tv", state="idle"):
+    """Register a media_player under an integration platform and give it a state."""
+    from homeassistant.helpers import entity_registry as er
+
+    object_id = entity_id.split(".", 1)[1]
+    er.async_get(hass).async_get_or_create(
+        "media_player", platform, object_id, suggested_object_id=object_id
+    )
+    hass.states.async_set(entity_id, state)
+
+
 class TestSearchLibraryService:
     """Tests for the search_library service."""
 
@@ -358,7 +370,7 @@ class TestHandoverService:
     async def test_handover_with_stream_url(self, mock_service_hass, mock_coordinator):
         """Test handover with provided stream URL."""
         mock_coordinator.data = {"current_watching": None}
-        mock_service_hass.states.async_set("media_player.apple_tv", "idle")
+        _add_media_player(mock_service_hass, "media_player.apple_tv")
 
         await async_setup_services(mock_service_hass)
 
@@ -416,7 +428,7 @@ class TestHandoverTargetResolution:
     ):
         """An existing requested media_player is used as the target."""
         mock_coordinator.data = {"current_watching": None}
-        mock_service_hass.states.async_set("media_player.living_room", "idle")
+        _add_media_player(mock_service_hass, "media_player.living_room")
         await async_setup_services(mock_service_hass)
 
         manager = await self._call_handover(
@@ -438,7 +450,7 @@ class TestHandoverTargetResolution:
     ):
         """A missing requested entity falls back to the configured default, with an info log."""
         mock_coordinator.data = {"current_watching": None}
-        mock_service_hass.states.async_set("media_player.bedroom", "idle")
+        _add_media_player(mock_service_hass, "media_player.bedroom")
         self._add_configured_entity(mock_service_hass, "media_player.bedroom")
         await async_setup_services(mock_service_hass)
 
@@ -463,7 +475,7 @@ class TestHandoverTargetResolution:
     ):
         """An omitted device_id uses the configured default."""
         mock_coordinator.data = {"current_watching": None}
-        mock_service_hass.states.async_set("media_player.bedroom", "idle")
+        _add_media_player(mock_service_hass, "media_player.bedroom")
         self._add_configured_entity(mock_service_hass, "media_player.bedroom")
         await async_setup_services(mock_service_hass)
 
@@ -493,6 +505,113 @@ class TestHandoverTargetResolution:
             )
 
         assert err.value.translation_key == "no_apple_tv_entity"
+
+    @pytest.mark.asyncio
+    async def test_non_apple_tv_entity_falls_back_to_configured(
+        self, mock_service_hass, mock_coordinator, caplog
+    ):
+        """A Music Assistant player is rejected and the configured Apple TV is used."""
+        mock_coordinator.data = {"current_watching": None}
+        _add_media_player(mock_service_hass, "media_player.bedroom", "music_assistant")
+        _add_media_player(mock_service_hass, "media_player.bedroom_apple_tv")
+        self._add_configured_entity(mock_service_hass, "media_player.bedroom_apple_tv")
+        await async_setup_services(mock_service_hass)
+
+        with caplog.at_level("INFO", logger="custom_components.stremio.services"):
+            manager = await self._call_handover(
+                mock_service_hass,
+                {
+                    "device_id": "media_player.bedroom",
+                    "stream_url": "https://example.com/a.mkv",
+                    "method": "vlc",
+                },
+            )
+
+        assert manager.handover.call_args.kwargs["device_identifier"] == (
+            "media_player.bedroom_apple_tv"
+        )
+        assert "belongs to music_assistant" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_non_apple_tv_entity_without_fallback_raises(
+        self, mock_service_hass, mock_coordinator
+    ):
+        """A non-Apple TV target with no valid default names the entity and platform."""
+        mock_coordinator.data = {"current_watching": None}
+        _add_media_player(mock_service_hass, "media_player.bedroom", "music_assistant")
+        await async_setup_services(mock_service_hass)
+
+        with pytest.raises(ServiceValidationError) as err:
+            await self._call_handover(
+                mock_service_hass,
+                {
+                    "device_id": "media_player.bedroom",
+                    "stream_url": "https://example.com/a.mkv",
+                    "method": "vlc",
+                },
+            )
+
+        assert err.value.translation_key == "not_apple_tv_entity"
+        assert err.value.translation_placeholders == {
+            "entity_id": "media_player.bedroom",
+            "platform": "music_assistant",
+        }
+
+    @pytest.mark.asyncio
+    async def test_wake_delay_passed_to_handover(
+        self, mock_service_hass, mock_coordinator
+    ):
+        """wake_delay from the service call reaches the handover manager."""
+        mock_coordinator.data = {"current_watching": None}
+        _add_media_player(mock_service_hass, "media_player.media_apple_tv")
+        await async_setup_services(mock_service_hass)
+
+        manager = await self._call_handover(
+            mock_service_hass,
+            {
+                "device_id": "media_player.media_apple_tv",
+                "stream_url": "https://example.com/a.mkv",
+                "method": "vlc",
+                "wake_delay": 25,
+            },
+        )
+
+        assert manager.handover.call_args.kwargs["wake_delay"] == 25
+
+    @pytest.mark.asyncio
+    async def test_handover_error_has_no_url(self, mock_service_hass, mock_coordinator):
+        """A handover failure surfaces without the stream or deep link URL."""
+        from custom_components.stremio.apple_tv_handover import HandoverError
+
+        mock_coordinator.data = {"current_watching": None}
+        _add_media_player(mock_service_hass, "media_player.media_apple_tv")
+        await async_setup_services(mock_service_hass)
+
+        with patch(
+            "custom_components.stremio.services.HandoverManager"
+        ) as mock_handover:
+            mock_manager = MagicMock()
+            mock_manager.handover = AsyncMock(
+                side_effect=HandoverError(
+                    "Could not resolve ['vlc-x-callback://x-callback-url/stream?url="
+                    "https%3A%2F%2Fexample.com%2Fsecret-token%2Fa.mkv'] to media"
+                )
+            )
+            mock_handover.return_value = mock_manager
+            with pytest.raises(HomeAssistantError) as err:
+                await mock_service_hass.services.async_call(
+                    DOMAIN,
+                    SERVICE_HANDOVER_TO_APPLE_TV,
+                    {
+                        "device_id": "media_player.media_apple_tv",
+                        "stream_url": "https://example.com/secret-token/a.mkv",
+                        "method": "vlc",
+                    },
+                    blocking=True,
+                )
+
+        assert "://" not in str(err.value)
+        assert "secret-token" not in str(err.value)
 
 
 class TestServiceRegistration:

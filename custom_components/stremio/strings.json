@@ -100,6 +100,9 @@
   "exceptions": {
     "no_apple_tv_entity": {
       "message": "No Apple TV entity to send to. Set the Apple TV entity on the card, or in the Stremio integration options."
+    },
+    "not_apple_tv_entity": {
+      "message": "{entity_id} belongs to {platform}, not apple_tv. Pick an Apple TV integration entity on the card or in the Stremio integration options."
     }
   }
 }
