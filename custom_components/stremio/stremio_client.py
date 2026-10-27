@@ -40,6 +40,19 @@ COLLECTION_LIBRARY_ITEM = "libraryItem"
 COLLECTION_USER = "user"
 
 
+def watch_progress_percent(item: dict[str, Any]) -> float:
+    """How far into a title playback got, 0-100.
+
+    Uses the stopped-at position (time_offset) when known. timeWatched
+    ("progress") is total time watched and passes 100% after rewatching.
+    """
+    position = item.get("time_offset") or item.get("progress") or 0
+    duration = item.get("duration") or 0
+    if duration <= 0:
+        return 0
+    return round(min(100.0, position / duration * 100), 1)
+
+
 def _utc_iso_ms_z() -> str:
     return (
         datetime.now(timezone.utc)
@@ -1050,6 +1063,125 @@ class StremioClient:
             _LOGGER.exception("Failed to add to library")
             raise StremioConnectionError(f"Failed to add to library: {err}") from err
 
+    async def async_update_playback(
+        self,
+        media_id: str,
+        media_type: str = "movie",
+        season: int | None = None,
+        episode: int | None = None,
+        time_offset: int | None = None,
+        duration: int | None = None,
+        finished: bool = False,
+    ) -> bool:
+        """Record playback of a title in Stremio so it shows in Continue Watching.
+
+        Titles not in the library are stored the way Stremio's own players do:
+        removed + temp, so they appear in Continue Watching but not the library.
+
+        Args:
+            media_id: IMDb ID (e.g. "tt1234567")
+            media_type: "movie" or "series"
+            season: Season number (series)
+            episode: Episode number (series)
+            time_offset: Playback position in ms; None keeps the saved position
+            duration: Duration in ms; None keeps the saved duration
+            finished: Mark as watched and clear the position
+
+        Returns:
+            True if Stremio accepted the update
+        """
+        if not self._auth_key:
+            raise StremioConnectionError("Client not authenticated")
+
+        item = await self.async_find_item(media_id, media_type)
+        if not isinstance(item, dict):
+            _LOGGER.warning("Cannot record playback: %s not found", media_id)
+            return False
+
+        now = _utc_iso_ms_z()
+        if item.get("removed", False):
+            # Not in the library: keep it out, but visible in Continue Watching
+            item["temp"] = True
+        item["_mtime"] = now
+
+        state = {
+            "lastWatched": "",
+            "timeWatched": 0,
+            "timeOffset": 0,
+            "overallTimeWatched": 0,
+            "timesWatched": 0,
+            "flaggedWatched": 0,
+            "duration": 0,
+            "video_id": "",
+            "watched": "",
+            "noNotif": False,
+            **(item.get("state") or {}),
+        }
+        video_id = (
+            f"{media_id}:{season}:{episode}"
+            if media_type == "series" and season is not None and episode is not None
+            else media_id
+        )
+        if state.get("video_id") != video_id:
+            # A different episode: its position starts fresh
+            state["timeOffset"] = 0
+        state["video_id"] = video_id
+        state["lastWatched"] = now
+        if duration:
+            state["duration"] = int(duration)
+
+        if finished:
+            state["timeOffset"] = 0
+            state["flaggedWatched"] = 1
+            state["timesWatched"] = int(state.get("timesWatched") or 0) + 1
+            state["watched"] = now
+        else:
+            if time_offset is not None:
+                state["timeOffset"] = max(0, int(time_offset))
+            # Continue Watching only lists titles with some watch time
+            state["timeOffset"] = max(int(state.get("timeOffset") or 0), 1000)
+            state["timeWatched"] = max(
+                int(state.get("timeWatched") or 0), state["timeOffset"]
+            )
+            state["overallTimeWatched"] = max(
+                int(state.get("overallTimeWatched") or 0), state["timeOffset"]
+            )
+        item["state"] = state
+
+        _LOGGER.debug(
+            "Recording playback for %s: offset=%sms duration=%sms finished=%s",
+            video_id,
+            state["timeOffset"],
+            state["duration"],
+            finished,
+        )
+        try:
+            session = await self._get_session()
+            payload = {
+                "authKey": self._auth_key,
+                "collection": COLLECTION_LIBRARY_ITEM,
+                "changes": [item],
+            }
+            async with session.post(STREMIO_DATASTORE_PUT_URL, json=payload) as response:
+                if response.status == 401:
+                    raise StremioAuthError("Authentication expired or invalid")
+                if response.status != 200:
+                    raise StremioConnectionError(
+                        f"Failed to record playback (status {response.status})"
+                    )
+                data = await response.json()
+                success = bool(
+                    data.get("success", False)
+                    or (data.get("result") or {}).get("success", False)
+                )
+                if not success:
+                    _LOGGER.warning("Stremio did not accept the playback update")
+                return success
+        except (StremioAuthError, StremioConnectionError):
+            raise
+        except ClientError as err:
+            raise StremioConnectionError(f"Connection failed: {err}") from err
+
     async def async_remove_from_library(self, media_id: str) -> bool:
         """Remove item from library.
 
@@ -1220,8 +1352,9 @@ class StremioClient:
 
         for item in watching:
             try:
-                # Skip removed items
-                if item.get("removed", False):
+                # Skip removed items, except temp ones: Stremio keeps titles you
+                # watched without adding to the library as removed + temp
+                if item.get("removed", False) and not item.get("temp", False):
                     continue
 
                 # Extract item data

@@ -972,6 +972,8 @@ class StremioMediaDetailsCard extends LitElement {
           };
           if (season && episode) {
             displayItem.title = `${this._media.title} - S${season}E${episode}`;
+            displayItem.season = season;
+            displayItem.episode = episode;
           }
           this._showStreamDialog(displayItem, streams);
         } else {

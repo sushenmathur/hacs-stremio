@@ -33,7 +33,12 @@ from .const import (
     EVENT_RESUME_AVAILABLE,
     POLLING_GATE_IDLE_INTERVAL,
 )
-from .stremio_client import StremioAuthError, StremioClient, StremioConnectionError
+from .stremio_client import (
+    StremioAuthError,
+    StremioClient,
+    StremioConnectionError,
+    watch_progress_percent,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -641,17 +646,14 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Current watching is the most recently watched with progress < 100%
                 for item in sorted_watching:
-                    progress = item.get("progress", 0)
-                    duration = item.get("duration", 1)
-                    progress_percent = (
-                        (progress / duration * 100) if duration > 0 else 0
-                    )
+                    progress_percent = watch_progress_percent(item)
 
                     if 0 < progress_percent < 95:  # Not finished
                         data["current_watching"] = {
                             **item,
-                            "progress_percent": round(progress_percent, 1),
-                            "time_offset": progress,
+                            "progress_percent": progress_percent,
+                            "time_offset": item.get("time_offset")
+                            or item.get("progress", 0),
                             "stream_url": self._current_stream_url,
                         }
                         break
@@ -661,18 +663,7 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     last_item = sorted_watching[0]
                     data["last_watched"] = {
                         **last_item,
-                        "progress_percent": (
-                            round(
-                                (
-                                    last_item.get("progress", 0)
-                                    / last_item.get("duration", 1)
-                                )
-                                * 100,
-                                1,
-                            )
-                            if last_item.get("duration", 0) > 0
-                            else 0
-                        ),
+                        "progress_percent": watch_progress_percent(last_item),
                     }
 
             # Fetch episode titles for series items
