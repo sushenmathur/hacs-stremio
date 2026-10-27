@@ -53,7 +53,12 @@ APPLE_TV_ASLEEP_STATES = ("off", "standby")
 # Seconds to wait for the Apple TV to report it is awake after turn_on
 WAKE_TIMEOUT = 30
 # Seconds to let tvOS settle after waking before launching VLC
-DEFAULT_WAKE_DELAY = 15
+DEFAULT_WAKE_DELAY = 3
+# After a wake, seconds to wait for VLC to come to the front before resending
+VLC_LAUNCH_CHECK = 8
+# Extra launch attempts after a wake (tvOS can drop a launch while waking)
+VLC_LAUNCH_RETRIES = 2
+VLC_APP_ID = "org.videolan.vlc-ios"
 
 
 # Try to import pyatv, but handle if not installed or incompatible
@@ -533,24 +538,36 @@ class HandoverManager:
                 "in Home Assistant's Entities page."
             )
 
-        if state.state in APPLE_TV_ASLEEP_STATES:
+        woke = state.state in APPLE_TV_ASLEEP_STATES
+        if woke:
             await self._wake_apple_tv(device_entity_id, wake_delay)
 
         try:
             vlc_url = self.generate_vlc_deep_link(stream_url, title, subtitle_url)
-
-            # Use media_player.play_media to open VLC with the stream
-            # The Apple TV integration will handle opening VLC via deep link
-            await self.hass.services.async_call(
-                "media_player",
-                "play_media",
-                {
-                    "entity_id": device_entity_id,
-                    "media_content_type": "url",
-                    "media_content_id": vlc_url,
-                },
-                blocking=True,
-            )
+            # A freshly woken Apple TV can ignore the first launch; check VLC came
+            # up and resend rather than waiting a long fixed time
+            attempts = 1 + (VLC_LAUNCH_RETRIES if woke else 0)
+            for attempt in range(1, attempts + 1):
+                # The Apple TV integration opens VLC via the deep link
+                await self.hass.services.async_call(
+                    "media_player",
+                    "play_media",
+                    {
+                        "entity_id": device_entity_id,
+                        "media_content_type": "url",
+                        "media_content_id": vlc_url,
+                    },
+                    blocking=True,
+                )
+                if not woke or await self._wait_for_vlc(device_entity_id):
+                    break
+                if attempt < attempts:
+                    _LOGGER.info(
+                        "VLC didn't open on '%s' after waking; resending (%d/%d)",
+                        device_entity_id,
+                        attempt + 1,
+                        attempts,
+                    )
 
             _LOGGER.info("Successfully sent VLC deep link to '%s'", device_entity_id)
             return True
@@ -562,6 +579,15 @@ class HandoverManager:
             raise HandoverError(
                 f"VLC handover to '{device_entity_id}' failed: {safe_error(err)}"
             ) from err
+
+    async def _wait_for_vlc(self, device_entity_id: str) -> bool:
+        """True once VLC is the app in front on the Apple TV."""
+        for _ in range(VLC_LAUNCH_CHECK):
+            await asyncio.sleep(1)
+            state = self.hass.states.get(device_entity_id)
+            if state is not None and state.attributes.get("app_id") == VLC_APP_ID:
+                return True
+        return False
 
     async def _wake_apple_tv(self, device_entity_id: str, wake_delay: float) -> None:
         """Turn on a sleeping Apple TV and wait until it can launch apps."""

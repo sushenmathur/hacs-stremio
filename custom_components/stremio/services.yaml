@@ -179,11 +179,11 @@ handover_to_apple_tv:
     wake_delay:
       name: Wake delay
       description: >-
-        Seconds to wait after turning on a sleeping Apple TV before launching VLC.
-        tvOS ignores app launches while it is still waking.
+        Seconds to wait after a sleeping Apple TV reports awake before launching
+        VLC. If VLC doesn't open within 8 s the link is resent (up to 2 times).
       required: false
-      default: 15
-      example: 20
+      default: 3
+      example: 5
       selector:
         number:
           min: 0
