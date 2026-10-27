@@ -14,6 +14,7 @@ from custom_components.stremio.apple_tv_handover import (
     VLC_LAUNCH_RETRIES,
     HandoverError,
     HandoverManager,
+    describe_stream_url,
     HandoverMethod,
     redact_url,
     safe_error,
@@ -245,3 +246,28 @@ class TestHandoverViaVlcWake:
             )
         assert "Could not turn on" in str(err.value)
         assert "://" not in str(err.value)
+
+
+class TestDescribeStreamUrl:
+    """Stream URLs are shown as host and file name, never the key-bearing path."""
+
+    def test_debrid_link(self):
+        url = (
+            "https://torrentio.example/resolve/realdebrid/SECRETKEY123/abcdef/null/1/"
+            "Silo.S01E01.480p.x264-ZMNT.mkv"
+        )
+        text = describe_stream_url(url)
+        assert text == "torrentio.example · Silo.S01E01.480p.x264-ZMNT.mkv"
+        assert "SECRETKEY123" not in text
+
+    def test_no_file_name_gives_host_only(self):
+        assert describe_stream_url("https://debrid.example/play/SECRETKEY") == (
+            "debrid.example"
+        )
+
+    def test_query_dropped(self):
+        text = describe_stream_url("https://cdn.example/a/movie.mp4?token=SECRET")
+        assert "SECRET" not in text and text.endswith("movie.mp4")
+
+    def test_empty(self):
+        assert describe_stream_url(None) is None

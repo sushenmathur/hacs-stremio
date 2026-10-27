@@ -21,6 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import StremioDataUpdateCoordinator
 from .entity_helpers import get_device_info
+from .apple_tv_handover import describe_stream_url
 from .stremio_client import watch_progress_percent
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,8 +150,9 @@ SENSOR_TYPES: tuple[StremioSensorEntityDescription, ...] = (
         key="current_stream_url",
         name="Current Stream URL",
         icon="mdi:link-variant",
+        # Host and file name only: the full link carries debrid keys
         value_fn=lambda data: (
-            data.get("current_watching", {}).get("stream_url")
+            describe_stream_url(data.get("current_watching", {}).get("stream_url"))
             if data.get("current_watching")
             else None
         ),

@@ -31,6 +31,25 @@ def redact_url(url: str | None) -> str:
     return f"host={urlsplit(url).hostname or '?'} len={len(url)}"
 
 
+def describe_stream_url(url: str | None) -> str | None:
+    """Show a stream URL as host and file name only.
+
+    Debrid links carry the API key in the path (and some addons in the query),
+    so the rest of the URL must never reach states, history or events.
+    """
+    if not url:
+        return None
+    parts = urlsplit(url)
+    host = parts.hostname or "?"
+    name = parts.path.rstrip("/").rsplit("/", 1)[-1]
+    # Only keep the last segment when it looks like a file, not a key
+    if "." in name and len(name) <= 200:
+        from urllib.parse import unquote
+
+        return f"{host} · {unquote(name)}"[:255]
+    return host
+
+
 _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+")
 _URL_REDACTED = "<redacted-url>"
 
