@@ -189,6 +189,40 @@ handover_to_apple_tv:
           min: 0
           max: 60
           unit_of_measurement: s
+    media_type:
+      name: Media type
+      description: Type of media_id, used to save progress to Stremio.
+      required: false
+      selector:
+        select:
+          options:
+            - "movie"
+            - "series"
+    season:
+      name: Season
+      description: Season of the episode being played (series).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+    episode:
+      name: Episode
+      description: Episode being played (series).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1000
+    track_progress:
+      name: Save progress to Stremio
+      description: >-
+        For VLC handovers with a media_id, add the title to Stremio's Continue
+        Watching and save the playback position from the Apple TV while VLC plays.
+      required: false
+      default: true
+      selector:
+        boolean:
 
 browse_catalog:
   name: Browse Catalog

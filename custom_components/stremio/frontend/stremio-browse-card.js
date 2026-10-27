@@ -1056,6 +1056,8 @@ class StremioBrowseCard extends LitElement {
           const displayItem = { ...item };
           if (season && episode) {
             displayItem.title = `${item.title} - S${season}E${episode}`;
+            displayItem.season = season;
+            displayItem.episode = episode;
           }
           this._showStreamDialog(displayItem, streams);
         } else {
@@ -1081,6 +1083,8 @@ class StremioBrowseCard extends LitElement {
           type: this._getItemMediaType(item),
           poster: item.thumbnail,
           imdb_id: this._extractMediaId(item),
+          season: item.season,
+          episode: item.episode,
         },
         streams,
         this.config.apple_tv_entity,

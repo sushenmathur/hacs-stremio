@@ -386,6 +386,17 @@ class StremioStreamDialog extends LitElement {
     if (this.appleTvEntity) {
       data.device_id = this.appleTvEntity;
     }
+    // Lets the integration add the title to Stremio's Continue Watching and
+    // save progress while VLC plays
+    const media = this.mediaItem || {};
+    if (media.imdb_id) {
+      data.media_id = media.imdb_id;
+      data.media_type = media.type === 'series' ? 'series' : 'movie';
+      if (data.media_type === 'series' && media.season && media.episode) {
+        data.season = Number(media.season);
+        data.episode = Number(media.episode);
+      }
+    }
     this.hass.callService('stremio', 'handover_to_apple_tv', data).catch((err) => {
       console.warn('[Stremio] Apple TV handover failed:', err);
     });
