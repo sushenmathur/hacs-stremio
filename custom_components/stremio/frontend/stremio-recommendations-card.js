@@ -708,7 +708,10 @@ class StremioRecommendationsCard extends LitElement {
         let streams = response?.response?.streams || response?.streams;
         
         if (streams && streams.length > 0) {
-          this._showStreamDialog(item, streams);
+          this._showStreamDialog(
+            season && episode ? { ...item, season, episode } : item,
+            streams
+          );
         } else {
           this._showToast('No streams found');
         }
@@ -728,6 +731,8 @@ class StremioRecommendationsCard extends LitElement {
           type: item.type,
           poster: item.poster,
           imdb_id: item.imdb_id || item.id,
+          season: item.season,
+          episode: item.episode,
         },
         streams,
         this.config.apple_tv_entity,

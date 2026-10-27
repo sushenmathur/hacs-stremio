@@ -48,6 +48,7 @@ from .const import (
     SERVICE_SEARCH_LIBRARY,
 )
 from .coordinator import StremioDataUpdateCoordinator
+from .playback_tracker import TrackedMedia, async_start_tracking, vlc_title
 from .stremio_client import StremioClient, StremioConnectionError
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ ATTR_DEVICE_ID = "device_id"
 ATTR_STREAM_URL = "stream_url"
 ATTR_METHOD = "method"
 ATTR_WAKE_DELAY = "wake_delay"
+ATTR_TRACK_PROGRESS = "track_progress"
 
 # Only Apple TV integration entities can launch VLC; others (e.g. Music Assistant
 # AirPlay speakers named after the Apple TV) fail with unrelated errors.
@@ -123,6 +125,10 @@ HANDOVER_SCHEMA = vol.Schema(
         vol.Optional(ATTR_WAKE_DELAY): vol.All(
             vol.Coerce(float), vol.Range(min=0, max=60)  # type: ignore[arg-type]
         ),
+        vol.Optional(ATTR_MEDIA_TYPE): vol.In(["movie", "series"]),
+        vol.Optional(ATTR_SEASON): vol.Coerce(int),  # type: ignore[arg-type]
+        vol.Optional(ATTR_EPISODE): vol.Coerce(int),  # type: ignore[arg-type]
+        vol.Optional(ATTR_TRACK_PROGRESS, default=True): cv.boolean,
     }
 )
 
@@ -509,6 +515,63 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         await coordinator.async_request_refresh()
 
+    def _start_progress_sync(
+        device_id: str, media_info: dict, title_before: str | None
+    ) -> None:
+        """Add the title to Continue Watching and follow VLC to save progress."""
+        coordinator, client, _ = _get_entry_data(hass)
+        media_id = media_info.get("imdb_id")
+        media_type = media_info.get("type") or "movie"
+        season = media_info.get("season")
+        episode = media_info.get("episode")
+        if not media_id:
+            _LOGGER.debug("No media_id for handover; progress isn't saved to Stremio")
+            return
+        if media_type == "series" and (season is None or episode is None):
+            _LOGGER.info(
+                "Series handover without season/episode; progress isn't saved"
+            )
+            return
+
+        # Where Stremio says this title (or episode) was stopped, if anywhere
+        video_id = f"{media_id}:{season}:{episode}" if media_type == "series" else media_id
+        saved_ms = 0
+        for item in (coordinator.data or {}).get("continue_watching", []):
+            if item.get("imdb_id") == media_id and (
+                item.get("video_id") or media_id
+            ) == video_id:
+                saved_ms = item.get("time_offset") or 0
+                break
+        media = TrackedMedia(
+            media_id, media_type, season, episode, saved_position=saved_ms / 1000
+        )
+
+        def _refresh() -> None:
+            hass.async_create_task(coordinator.async_request_refresh())
+
+        async def _mark_watching() -> None:
+            try:
+                await client.async_update_playback(
+                    media_id=media_id,
+                    media_type=media_type,
+                    season=season,
+                    episode=episode,
+                )
+                _refresh()
+            except Exception as err:  # noqa: BLE001 - playback already started
+                _LOGGER.warning(
+                    "Couldn't add %s to Continue Watching: %s",
+                    media_id,
+                    safe_error(err),
+                )
+
+        hass.async_create_background_task(
+            _mark_watching(), f"stremio_mark_watching_{media_id}"
+        )
+        async_start_tracking(
+            hass, client, device_id, media, title_before=title_before, on_saved=_refresh
+        )
+
     async def handle_handover_to_apple_tv(call: ServiceCall) -> None:
         """Handle handover_to_apple_tv service call."""
         coordinator, client, entry_id = _get_entry_data(hass)
@@ -602,10 +665,12 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     f"Failed to get stream URL: {safe_error(err)}"
                 ) from err
         else:
-            # Stream URL was provided directly, build minimal media info
+            # Stream URL was provided directly; the card sends what it knows
             media_info = {
                 "imdb_id": media_id,
-                "type": "movie",  # Default assumption
+                "type": call.data.get(ATTR_MEDIA_TYPE, "movie"),
+                "season": call.data.get(ATTR_SEASON),
+                "episode": call.data.get(ATTR_EPISODE),
             }
 
         if not stream_url:
@@ -640,6 +705,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             device_identifier=device_identifier,
         )
 
+        # VLC's current file, so the tracker doesn't mistake it for the new one
+        title_before = vlc_title(hass.states.get(device_id))
+
         try:
             result = await handover_manager.handover(
                 device_identifier=device_id,
@@ -656,6 +724,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
         except HandoverError as err:
             raise HomeAssistantError(f"Handover failed: {safe_error(err)}") from err
+
+        if result.get("method") == "vlc" and call.data.get(ATTR_TRACK_PROGRESS, True):
+            _start_progress_sync(device_id, media_info, title_before)
 
         # Fire event
         hass.bus.async_fire(

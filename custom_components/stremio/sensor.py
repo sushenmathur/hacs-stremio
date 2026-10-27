@@ -21,6 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import StremioDataUpdateCoordinator
 from .entity_helpers import get_device_info
+from .stremio_client import watch_progress_percent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -202,13 +203,7 @@ SENSOR_TYPES: tuple[StremioSensorEntityDescription, ...] = (
                     "imdb_id": item.get("imdb_id"),
                     "id": item.get("id"),
                     "year": item.get("year"),
-                    "progress_percent": (
-                        round(
-                            (item.get("progress", 0) / item.get("duration", 1)) * 100, 1
-                        )
-                        if item.get("duration", 0) > 0
-                        else 0
-                    ),
+                    "progress_percent": watch_progress_percent(item),
                     "time_offset": item.get("time_offset", 0),
                     "duration": item.get("duration", 0),
                     "video_id": item.get("video_id"),

@@ -790,6 +790,8 @@ class StremioContinueWatchingCard extends LitElement {
           const displayItem = { ...item, resumePosition: this._resumePosition(item, season, episode) };
           if (season && episode) {
             displayItem.title = `${item.title || item.name} - S${season}E${episode}`;
+            displayItem.season = season;
+            displayItem.episode = episode;
           }
           this._showStreamDialog(displayItem, streams);
         } else {
@@ -829,6 +831,8 @@ class StremioContinueWatchingCard extends LitElement {
           type: item.type,
           poster: item.poster,
           imdb_id: item.imdb_id || item.id,
+          season: item.season,
+          episode: item.episode,
         },
         streams,
         this.config.apple_tv_entity,
