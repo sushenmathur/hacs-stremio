@@ -75,6 +75,9 @@ def safe_error(err: BaseException | str) -> str:
 
 # Apple TV states that mean the box is asleep and must be woken before VLC can launch
 APPLE_TV_ASLEEP_STATES = ("off", "standby")
+# States that say nothing about whether the box is awake (e.g. reconnecting after
+# turn_on); keep waiting rather than launching VLC into a sleeping Apple TV
+APPLE_TV_UNKNOWN_STATES = ("unavailable", "unknown")
 # Seconds to wait for the Apple TV to report it is awake after turn_on
 WAKE_TIMEOUT = 30
 # Seconds to let tvOS settle after waking before launching VLC
@@ -633,12 +636,15 @@ class HandoverManager:
         deadline = loop.time() + WAKE_TIMEOUT
         while loop.time() < deadline:
             state = self.hass.states.get(device_entity_id)
-            if state is not None and state.state not in APPLE_TV_ASLEEP_STATES:
+            if state is not None and state.state not in (
+                *APPLE_TV_ASLEEP_STATES,
+                *APPLE_TV_UNKNOWN_STATES,
+            ):
                 break
             await asyncio.sleep(1)
         else:
             _LOGGER.warning(
-                "Apple TV '%s' still reports asleep after %ss; trying VLC anyway",
+                "Apple TV '%s' isn't reporting awake after %ss; trying VLC anyway",
                 device_entity_id,
                 WAKE_TIMEOUT,
             )
