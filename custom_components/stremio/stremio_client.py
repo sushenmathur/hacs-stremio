@@ -14,6 +14,8 @@ See: https://github.com/Stremio/stremio-api-client
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import time
 import urllib.parse
@@ -53,6 +55,25 @@ def watch_progress_percent(item: dict[str, Any]) -> float:
     return round(min(100.0, position / duration * 100), 1)
 
 
+def _serialised_per_media(func):
+    """Run a library read-modify-write for one title at a time.
+
+    Each update reads the item from Stremio, changes it and writes it back.
+    Two overlapping updates for the same title (e.g. the handover's
+    "watching" write and a tracker save, or a library add) would otherwise
+    both read the old item and the later write would undo the earlier one.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(self: StremioClient, *args: Any, **kwargs: Any) -> Any:
+        media_id = kwargs["media_id"] if "media_id" in kwargs else args[0]
+        lock = self._media_locks.setdefault(media_id, asyncio.Lock())
+        async with lock:
+            return await func(self, *args, **kwargs)
+
+    return wrapper
+
+
 def _utc_iso_ms_z() -> str:
     return (
         datetime.now(timezone.utc)
@@ -88,6 +109,8 @@ class StremioClient:
         self._session: aiohttp.ClientSession | None = session
         self._owns_session: bool = session is None  # Track if we created the session
         self._last_auth_time: float = 0
+        # One lock per title for library read-modify-write updates
+        self._media_locks: dict[str, asyncio.Lock] = {}
         _LOGGER.debug(
             "StremioClient initialized for user: %s (external_session=%s)",
             email,
@@ -970,6 +993,7 @@ class StremioClient:
 
         return all_streams
 
+    @_serialised_per_media
     async def async_add_to_library(
         self, media_id: str, media_type: str = "movie"
     ) -> bool:
@@ -1066,6 +1090,7 @@ class StremioClient:
             _LOGGER.exception("Failed to add to library")
             raise StremioConnectionError(f"Failed to add to library: {err}") from err
 
+    @_serialised_per_media
     async def async_update_playback(
         self,
         media_id: str,
@@ -1226,6 +1251,7 @@ class StremioClient:
             "state": {},
         }
 
+    @_serialised_per_media
     async def async_remove_from_library(self, media_id: str) -> bool:
         """Remove item from library.
 

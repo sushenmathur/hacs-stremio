@@ -304,3 +304,132 @@ class TestNewLibraryItem:
         sent = session.post.call_args.kwargs["json"]["changes"][0]
         assert sent["state"]["video_id"] == "tt9:1:4"
         assert sent["state"]["timeOffset"] == 1000
+
+
+class TestTrackerReviewFixes:
+    async def test_stop_saves_final_live_position(self, hass: HomeAssistant, freezer):
+        # The last update said 600 s; VLC played on for 40 s before stopping
+        client = _client()
+        await _start(hass, client)
+        hass.states.async_set(ATV, "playing", _vlc(position=600))
+        await hass.async_block_till_done()
+        freezer.tick(timedelta(seconds=40))
+        hass.states.async_set(ATV, "idle", {"app_id": VLC_APP_ID})
+        await hass.async_block_till_done()
+
+        assert client.async_update_playback.call_args.kwargs["time_offset"] == 640000
+
+    async def test_same_title_after_a_gap_is_tracked(self, hass: HomeAssistant):
+        # Handing over the file VLC was already showing: VLC closes it, then
+        # opens the "same" title again from the start
+        client = _client()
+        await _start(hass, client, title_before="Show S01E04")
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=900))
+        await hass.async_block_till_done()
+        hass.states.async_set(ATV, "idle", {"app_id": VLC_APP_ID})
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=30))
+        await hass.async_block_till_done()
+
+        assert client.async_update_playback.call_args.kwargs["time_offset"] == 30000
+
+    async def test_same_title_restarted_from_position_is_tracked(
+        self, hass: HomeAssistant
+    ):
+        client = _client()
+        async_start_tracking(
+            hass,
+            client,
+            ATV,
+            TrackedMedia("tt1", "movie"),
+            title_before="Show S01E04",
+            position_before=900,
+        )
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=902))
+        await hass.async_block_till_done()
+        client.async_update_playback.assert_not_called()
+
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=2))
+        await hass.async_block_till_done()
+        assert client.async_update_playback.call_args.kwargs["time_offset"] == 2000
+
+    async def test_finished_save_calls_on_finished(self, hass: HomeAssistant):
+        client = _client()
+        finished = MagicMock()
+        async_start_tracking(
+            hass, client, ATV, TrackedMedia("tt1", "movie"), on_finished=finished
+        )
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=600))
+        await hass.async_block_till_done()
+        finished.assert_not_called()
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=2800))
+        await hass.async_block_till_done()
+        finished.assert_called_once()
+
+    async def test_unload_saves_and_stops_only_that_clients_trackers(
+        self, hass: HomeAssistant
+    ):
+        from custom_components.stremio.playback_tracker import async_stop_tracking
+
+        other_atv = "media_player.bedroom_apple_tv"
+        client, other_client = _client(), _client()
+        await _start(hass, client)
+        async_start_tracking(hass, other_client, other_atv, TrackedMedia("tt2"))
+        hass.states.async_set(ATV, "playing", _vlc(position=300))
+        await hass.async_block_till_done()
+
+        await async_stop_tracking(hass, client)
+
+        assert client.async_update_playback.await_args.kwargs["time_offset"] >= 300000
+        assert ATV not in hass.data[DATA_TRACKERS]
+        assert other_atv in hass.data[DATA_TRACKERS]
+        # A stopped tracker ignores later VLC updates
+        calls = client.async_update_playback.await_count
+        hass.states.async_set(ATV, "paused", _vlc(state="paused", position=900))
+        await hass.async_block_till_done()
+        assert client.async_update_playback.await_count == calls
+
+
+class TestUpdatePlaybackSerialised:
+    async def test_same_title_updates_do_not_interleave(self):
+        import asyncio
+
+        client = StremioClient("test@example.com", "password")
+        client._auth_key = "key"
+        events: list[str] = []
+        stored = {"_id": "tt1", "type": "movie", "removed": False, "state": {}}
+
+        async def _find(_media_id):
+            events.append("read")
+            await asyncio.sleep(0.01)
+            return {**stored, "state": dict(stored["state"])}
+
+        async def _post_json(item):
+            events.append("write")
+            stored["state"] = item["state"]
+
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={"result": {"success": True}})
+
+        def _post(_url, json):
+            ctx = MagicMock()
+
+            async def _enter():
+                await _post_json(json["changes"][0])
+                return response
+
+            ctx.__aenter__ = AsyncMock(side_effect=_enter)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            return ctx
+
+        session = MagicMock()
+        session.post = MagicMock(side_effect=_post)
+        client.async_find_existing_item = AsyncMock(side_effect=_find)
+        client._get_session = AsyncMock(return_value=session)
+
+        await asyncio.gather(
+            client.async_update_playback(media_id="tt1", finished=True),
+            client.async_update_playback(media_id="tt1", time_offset=5000),
+        )
+        assert events == ["read", "write", "read", "write"]
+        # The second update saw the first one's write (timesWatched kept)
+        assert stored["state"]["timesWatched"] == 1

@@ -52,6 +52,19 @@ BASE_RETRY_DELAY = 1.0  # seconds
 MAX_RETRY_DELAY = 10.0  # seconds
 
 
+def _same_media(current: dict[str, Any], handover: dict[str, Any]) -> bool:
+    """True if Stremio's entry is the handed-over title (and episode, for series)."""
+    if current.get("imdb_id") != handover.get("imdb_id"):
+        return False
+    if handover.get("season") is None or handover.get("episode") is None:
+        return True
+    # Series: Stremio still showing the previous episode isn't an acknowledgement
+    return (current.get("season"), current.get("episode")) == (
+        handover.get("season"),
+        handover.get("episode"),
+    )
+
+
 class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching Stremio data from the API."""
 
@@ -409,6 +422,7 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if media_info is None:
             _LOGGER.debug("Clearing current media")
+            self._handover_media = None
             if self.data:
                 self.data["current_watching"] = None
                 self.async_set_updated_data(self.data)
@@ -464,16 +478,15 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not handover:
             return current
         age = time.monotonic() - self._handover_at
-        same_title = current is not None and current.get("imdb_id") == handover.get(
-            "imdb_id"
-        )
-        if same_title:
-            # Stremio has it now; keep the handover's title/poster/episode if missing
+        if current is not None and _same_media(current, handover):
+            # Stremio has it now, so the hold is done; keep the handover's
+            # title/poster this once if Stremio's entry lacks them
+            self._handover_media = None
             return {
                 **current,
                 **{
                     key: handover[key]
-                    for key in ("title", "poster", "season", "episode")
+                    for key in ("title", "poster")
                     if handover.get(key) and not current.get(key)
                 },
                 "stream_url": self._current_stream_url,
@@ -482,6 +495,17 @@ class StremioDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {**handover, "stream_url": self._current_stream_url}
         self._handover_media = None
         return current
+
+    @callback
+    def async_handover_finished(self, media_id: str | None) -> None:
+        """Drop the now-playing hold once the handed-over title is finished.
+
+        A finished title leaves Stremio's Continue Watching, so without this the
+        hold would keep showing it as now playing until it expires.
+        """
+        handover = self._handover_media
+        if handover and (media_id is None or handover.get("imdb_id") == media_id):
+            self._handover_media = None
 
     async def async_shutdown(self) -> None:
         """Clean up resources on shutdown."""

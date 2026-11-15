@@ -394,9 +394,18 @@ class StremioStreamDialog extends LitElement {
       data.media_type = media.type === 'series' ? 'series' : 'movie';
       if (media.title) data.title = String(media.title);
       if (typeof media.poster === 'string' && media.poster) data.poster = media.poster;
-      if (data.media_type === 'series' && media.season && media.episode) {
-        data.season = Number(media.season);
-        data.episode = Number(media.episode);
+      // Season 0 holds specials, so test for a whole number, not truthiness
+      const season = Number(media.season);
+      const episode = Number(media.episode);
+      if (
+        data.media_type === 'series'
+        && media.season !== null && media.season !== undefined && media.season !== ''
+        && media.episode !== null && media.episode !== undefined && media.episode !== ''
+        && Number.isInteger(season) && season >= 0
+        && Number.isInteger(episode) && episode >= 0
+      ) {
+        data.season = season;
+        data.episode = episode;
       }
     }
     this.hass.callService('stremio', 'handover_to_apple_tv', data).catch((err) => {

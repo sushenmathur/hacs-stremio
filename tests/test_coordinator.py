@@ -442,3 +442,66 @@ async def test_handover_hold_expires(
     coordinator._handover_at -= 3600
     data = await coordinator._async_update_data()
     assert data["current_watching"]["imdb_id"] == "tt_old"
+
+
+def _hold_coordinator(hass, client, entry, cw):
+    client.async_get_continue_watching = AsyncMock(return_value=cw)
+    client.async_get_series_metadata = AsyncMock(return_value=None)
+    coordinator = StremioDataUpdateCoordinator(hass=hass, client=client, entry=entry)
+    coordinator.data = {}
+    return coordinator
+
+
+@pytest.mark.asyncio
+async def test_handover_of_next_episode_not_acknowledged_by_previous_one(
+    hass: HomeAssistant, mock_config_entry, mock_stremio_client_for_coordinator
+):
+    """Stremio still showing S1E1 doesn't count as having the S1E2 handover."""
+    previous = {**_cw("tt_show", "2026-10-27T08:00:00.000Z", 150000), "season": 1, "episode": 1}
+    coordinator = _hold_coordinator(
+        hass, mock_stremio_client_for_coordinator, mock_config_entry, [previous]
+    )
+    coordinator.set_current_media(
+        {"imdb_id": "tt_show", "type": "series", "season": 1, "episode": 2, "title": "E2"},
+        None,
+    )
+    data = await coordinator._async_update_data()
+    assert data["current_watching"]["episode"] == 2
+    assert coordinator._handover_media is not None
+
+
+@pytest.mark.asyncio
+async def test_handover_hold_retired_on_acknowledgement(
+    hass: HomeAssistant, mock_config_entry, mock_stremio_client_for_coordinator
+):
+    entry = {**_cw("tt_show", "2026-10-27T09:00:00.000Z", 60000), "season": 1, "episode": 2}
+    coordinator = _hold_coordinator(
+        hass, mock_stremio_client_for_coordinator, mock_config_entry, [entry]
+    )
+    coordinator.set_current_media(
+        {"imdb_id": "tt_show", "type": "series", "season": 1, "episode": 2}, None
+    )
+    data = await coordinator._async_update_data()
+    assert data["current_watching"]["time_offset"] == 60000
+    assert coordinator._handover_media is None
+
+
+@pytest.mark.asyncio
+async def test_handover_hold_retired_on_finish_and_clear(
+    hass: HomeAssistant, mock_config_entry, mock_stremio_client_for_coordinator
+):
+    old = _cw("tt_old", "2026-10-27T08:00:00.000Z", 150000)
+    coordinator = _hold_coordinator(
+        hass, mock_stremio_client_for_coordinator, mock_config_entry, [old]
+    )
+    coordinator.set_current_media({"imdb_id": "tt_new", "title": "New"}, None)
+    coordinator.async_handover_finished("tt_other")
+    assert coordinator._handover_media is not None
+    coordinator.async_handover_finished("tt_new")
+    data = await coordinator._async_update_data()
+    assert data["current_watching"]["imdb_id"] == "tt_old"
+
+    coordinator.set_current_media({"imdb_id": "tt_new", "title": "New"}, None)
+    coordinator.set_current_media(None)
+    data = await coordinator._async_update_data()
+    assert data["current_watching"]["imdb_id"] == "tt_old"
