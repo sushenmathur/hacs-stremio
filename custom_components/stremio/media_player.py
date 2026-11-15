@@ -42,6 +42,16 @@ from .stremio_client import StremioClient, StremioConnectionError
 _LOGGER = logging.getLogger(__name__)
 
 
+def _ms_to_seconds(value: Any) -> int | None:
+    """Stremio stores positions and durations in ms; media players use seconds."""
+    if value is None:
+        return None
+    try:
+        return int(value) // 1000
+    except (TypeError, ValueError):
+        return None
+
+
 def _describe_media_id(media_id: str | None) -> str | None:
     """Describe a media_id for logs and errors; direct stream URLs carry tokens."""
     if media_id and "://" in media_id and not media_id.startswith("media-source://"):
@@ -228,14 +238,18 @@ class StremioMediaPlayer(
     def media_position(self) -> int | None:
         """Return the position of current playing media in seconds."""
         if self.coordinator.data and self.coordinator.data.get("current_watching"):
-            return self.coordinator.data["current_watching"].get("time_offset")
+            return _ms_to_seconds(
+                self.coordinator.data["current_watching"].get("time_offset")
+            )
         return None
 
     @property
     def media_duration(self) -> int | None:
         """Return the duration of current playing media in seconds."""
         if self.coordinator.data and self.coordinator.data.get("current_watching"):
-            return self.coordinator.data["current_watching"].get("duration")
+            return _ms_to_seconds(
+                self.coordinator.data["current_watching"].get("duration")
+            )
         return None
 
     @property

@@ -23,6 +23,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import DOMAIN
 from .coordinator import StremioDataUpdateCoordinator
 from .frontend import JSModuleRegistration
+from .playback_tracker import async_stop_tracking
 from .services import async_setup_services, async_unload_services
 from .stremio_client import StremioAuthError, StremioClient, StremioConnectionError
 
@@ -172,6 +173,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Close the client to cleanup any resources
         client = data.get("client")
         if client:
+            # Stop this entry's VLC trackers and let their final saves finish
+            # while the client is still open
+            await async_stop_tracking(hass, client)
             await client.async_close()
 
         # Unload services if no more entries

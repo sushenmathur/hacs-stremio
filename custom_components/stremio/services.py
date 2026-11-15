@@ -49,7 +49,12 @@ from .const import (
     SERVICE_SEARCH_LIBRARY,
 )
 from .coordinator import StremioDataUpdateCoordinator
-from .playback_tracker import TrackedMedia, async_start_tracking, vlc_title
+from .playback_tracker import (
+    TrackedMedia,
+    async_start_tracking,
+    vlc_position,
+    vlc_title,
+)
 from .stremio_client import StremioClient, StremioConnectionError
 
 _LOGGER = logging.getLogger(__name__)
@@ -521,7 +526,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         await coordinator.async_request_refresh()
 
     def _start_progress_sync(
-        device_id: str, media_info: dict, title_before: str | None
+        device_id: str,
+        media_info: dict,
+        title_before: str | None,
+        position_before: float | None = None,
     ) -> None:
         """Add the title to Continue Watching and follow VLC to save progress."""
         coordinator, client, _ = _get_entry_data(hass)
@@ -574,7 +582,14 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _mark_watching(), f"stremio_mark_watching_{media_id}"
         )
         async_start_tracking(
-            hass, client, device_id, media, title_before=title_before, on_saved=_refresh
+            hass,
+            client,
+            device_id,
+            media,
+            title_before=title_before,
+            on_saved=_refresh,
+            position_before=position_before,
+            on_finished=lambda: coordinator.async_handover_finished(media_id),
         )
 
     async def handle_handover_to_apple_tv(call: ServiceCall) -> None:
@@ -727,8 +742,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             device_identifier=device_identifier,
         )
 
-        # VLC's current file, so the tracker doesn't mistake it for the new one
-        title_before = vlc_title(hass.states.get(device_id))
+        # VLC's current file and position, so the tracker doesn't mistake it for
+        # the new one (and can still tell when the same file is restarted)
+        state_before = hass.states.get(device_id)
+        title_before = vlc_title(state_before)
+        position_before = vlc_position(state_before)
 
         try:
             result = await handover_manager.handover(
@@ -748,7 +766,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(f"Handover failed: {safe_error(err)}") from err
 
         if result.get("method") == "vlc" and call.data.get(ATTR_TRACK_PROGRESS, True):
-            _start_progress_sync(device_id, media_info, title_before)
+            _start_progress_sync(device_id, media_info, title_before, position_before)
 
         # Fire event
         hass.bus.async_fire(

@@ -23,8 +23,8 @@ def mock_media_coordinator(mock_coordinator):
             "title": "The Shawshank Redemption",
             "type": "movie",
             "poster": "https://example.com/shawshank.jpg",
-            "time_offset": 3834,  # seconds
-            "duration": 8520,  # seconds
+            "time_offset": 3834000,  # ms, as Stremio stores it
+            "duration": 8520000,  # ms
             "imdb_id": "tt0111161",
             "year": 1994,
             "progress_percent": 45.5,
