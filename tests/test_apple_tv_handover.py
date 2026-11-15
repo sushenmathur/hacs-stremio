@@ -71,6 +71,15 @@ class TestRedactUrl:
     def test_empty(self, value):
         assert redact_url(value) == "<empty>"
 
+    @pytest.mark.parametrize(
+        "url",
+        ["http://[SECRET/movie.mkv", "https://[::1/SECRET?k=SECRET", "http://host:SECRET/"],
+    )
+    def test_malformed_url_does_not_raise_or_leak(self, url):
+        out = redact_url(url)
+        assert "SECRET" not in out
+        assert f"len={len(url)}" in out
+
 
 class TestHandoverViaVlcLogging:
     """Stream URLs must not reach the logs during a VLC handover."""

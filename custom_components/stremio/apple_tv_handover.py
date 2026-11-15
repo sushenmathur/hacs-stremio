@@ -28,7 +28,13 @@ def redact_url(url: str | None) -> str:
     """Describe a URL for logs without its path or query (which can carry tokens)."""
     if not url:
         return "<empty>"
-    return f"host={urlsplit(url).hostname or '?'} len={len(url)}"
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        # Malformed URLs (e.g. a bad IPv6 host) make urlsplit raise; logging
+        # must never fail, and must not echo the URL either
+        host = None
+    return f"host={host or '?'} len={len(url)}"
 
 
 def describe_stream_url(url: str | None) -> str | None:

@@ -37,6 +37,13 @@ from .stremio_client import StremioClient, StremioConnectionError
 _LOGGER = logging.getLogger(__name__)
 
 
+def _describe_media_id(media_id: str | None) -> str | None:
+    """Describe a media_id for logs and errors; direct stream URLs carry tokens."""
+    if media_id and "://" in media_id and not media_id.startswith("media-source://"):
+        return redact_url(media_id)
+    return media_id
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -324,8 +331,8 @@ class StremioMediaPlayer(
         _LOGGER.debug(
             "Play media requested - type=%s, id=%s, kwargs=%s",
             media_type,
-            media_id,
-            kwargs,
+            _describe_media_id(media_id),
+            sorted(kwargs),
         )
 
         # Check if Apple TV handover is enabled
@@ -339,7 +346,7 @@ class StremioMediaPlayer(
             _LOGGER.info(
                 "Apple TV handover not configured. Enable it in integration options "
                 "to play media on Apple TV. media_id=%s",
-                media_id,
+                _describe_media_id(media_id),
             )
             return
 
@@ -372,10 +379,10 @@ class StremioMediaPlayer(
         else:
             _LOGGER.warning(
                 "Unknown media_id format: %s. Expected media-source:// URI or HTTP URL.",
-                media_id,
+                _describe_media_id(media_id),
             )
             raise HomeAssistantError(
-                f"Unknown media format: {media_id}. "
+                f"Unknown media format: {_describe_media_id(media_id)}. "
                 "Please select a stream from the media browser."
             )
 
@@ -384,10 +391,10 @@ class StremioMediaPlayer(
             _LOGGER.warning(
                 "Could not determine stream URL for media_id=%s. "
                 "Ensure streams are available for this media.",
-                media_id,
+                _describe_media_id(media_id),
             )
             raise HomeAssistantError(
-                f"No stream URL found for media: {media_id}. "
+                f"No stream URL found for media: {_describe_media_id(media_id)}. "
                 "Please try selecting a specific stream from the media browser."
             )
 

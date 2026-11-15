@@ -401,6 +401,15 @@ class StremioStreamDialog extends LitElement {
     }
     this.hass.callService('stremio', 'handover_to_apple_tv', data).catch((err) => {
       console.warn('[Stremio] Apple TV handover failed:', err);
+      // Show the reason (e.g. no Apple TV configured) instead of failing silently
+      this.dispatchEvent(new CustomEvent('hass-notification', {
+        bubbles: true,
+        composed: true,
+        detail: {
+          message: `Apple TV handover failed: ${err?.message || 'unknown error'}`,
+          duration: 8000,
+        },
+      }));
     });
   }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -365,3 +366,26 @@ class TestMediaPlayerBrowse:
         assert result is not None
         assert result.title == "Library"
         assert result.can_expand is True
+
+
+class TestPlayMediaLogRedaction:
+    """Direct stream URLs passed to play_media must not reach the logs."""
+
+    URL = "https://debrid.example/SECRETPATH/movie.mkv?token=SECRETQUERY"
+
+    @pytest.mark.asyncio
+    async def test_not_configured_logs_no_url(
+        self, hass, mock_media_coordinator, mock_stremio_client, mock_config_entry, caplog
+    ):
+        caplog.set_level(logging.DEBUG, logger="custom_components.stremio.media_player")
+        player = StremioMediaPlayer(
+            mock_media_coordinator, mock_stremio_client, mock_config_entry
+        )
+        player.hass = hass
+        player._entry = MagicMock(options={})
+
+        await player.async_play_media("url", self.URL, extra={"title": "x"})
+
+        assert "debrid.example" in caplog.text
+        assert "SECRETPATH" not in caplog.text
+        assert "SECRETQUERY" not in caplog.text
