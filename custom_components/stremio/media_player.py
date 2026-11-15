@@ -18,7 +18,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .apple_tv_handover import HandoverError, HandoverManager, redact_url
+from .apple_tv_handover import (
+    HandoverError,
+    HandoverManager,
+    redact_url,
+    safe_error,
+)
 from .const import (
     CONF_APPLE_TV_CREDENTIALS,
     CONF_APPLE_TV_ENTITY_ID,
@@ -445,8 +450,10 @@ class StremioMediaPlayer(
             self.coordinator.schedule_refresh_after_playback()
 
         except HandoverError as err:
-            _LOGGER.error("Apple TV handover failed: %s", err)
-            raise HomeAssistantError(f"Apple TV handover failed: {err}") from err
+            _LOGGER.error("Apple TV handover failed: %s", safe_error(err))
+            raise HomeAssistantError(
+                f"Apple TV handover failed: {safe_error(err)}"
+            ) from err
 
     async def _resolve_media_source_identifier(
         self, identifier: str

@@ -389,3 +389,43 @@ class TestPlayMediaLogRedaction:
         assert "debrid.example" in caplog.text
         assert "SECRETPATH" not in caplog.text
         assert "SECRETQUERY" not in caplog.text
+
+
+class TestPlayMediaErrorRedaction:
+    """Handover errors from play_media must not carry the stream link."""
+
+    @pytest.mark.asyncio
+    async def test_handover_error_has_no_url(
+        self, hass, mock_media_coordinator, mock_stremio_client, mock_config_entry
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from homeassistant.exceptions import HomeAssistantError
+
+        from custom_components.stremio.apple_tv_handover import HandoverError
+        from custom_components.stremio.const import (
+            CONF_APPLE_TV_ENTITY_ID,
+            CONF_ENABLE_APPLE_TV_HANDOVER,
+        )
+
+        player = StremioMediaPlayer(
+            mock_media_coordinator, mock_stremio_client, mock_config_entry
+        )
+        player.hass = hass
+        player._entry = MagicMock(
+            options={
+                CONF_ENABLE_APPLE_TV_HANDOVER: True,
+                CONF_APPLE_TV_ENTITY_ID: "media_player.media_apple_tv",
+            }
+        )
+        failing = AsyncMock(
+            side_effect=HandoverError("failed: vlc-x-callback://x?url=SECRET")
+        )
+        with patch(
+            "custom_components.stremio.media_player.HandoverManager"
+        ) as manager, pytest.raises(HomeAssistantError) as err:
+            manager.return_value.handover = failing
+            await player.async_play_media(
+                "url", "https://debrid.example/SECRET/movie.mkv"
+            )
+        assert "SECRET" not in str(err.value)
